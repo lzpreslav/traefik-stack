@@ -1,0 +1,91 @@
+---
+version: "3.9"
+
+services:
+  traefik:
+    image: traefik:${TRAEFIK_TAG:-2.5}
+    command: >
+      --api
+      --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
+      --certificatesResolvers.cloudflare.acme.dnsChallenge.resolvers=1.1.1.1:53,1.0.0.1:53
+      --certificatesresolvers.cloudflare.acme.dnschallenge=true
+      --certificatesresolvers.cloudflare.acme.email=${CF_EMAIL}
+      --certificatesresolvers.cloudflare.acme.storage=/traefik-data/acme.json
+      --entrypoints.web.address=:80
+      --entrypoints.websecure.address=:443
+      --entrypoints.iperftcp.address=:5201
+      --entrypoints.iperfudp.address=:5201/udp
+      --entrypoints.wireguard.address=:51820/udp
+      --log.level=INFO
+      --pilot.dashboard=false
+      --providers.docker
+      --providers.docker.exposedByDefault=false
+      --providers.docker.network=traefik
+      --providers.file.directory=/traefik-data/fileProvider
+      --providers.file.watch=true
+    environment:
+      CF_DNS_API_TOKEN:
+      CF_ZONE_API_TOKEN:
+    labels:
+      traefik.enable: true
+      traefik.http.middlewares.redirect-to-https.redirectscheme.scheme: https
+      traefik.http.middlewares.secure-headers.headers.browserXSSFilter: true
+      traefik.http.middlewares.secure-headers.headers.contentTypeNosniff: true
+      traefik.http.middlewares.secure-headers.headers.FeaturePolicy: vibrate 'self'
+      traefik.http.middlewares.secure-headers.headers.forceSTSHeader: true
+      traefik.http.middlewares.secure-headers.headers.framedeny: true
+      traefik.http.middlewares.secure-headers.headers.ReferrerPolicy: same-origin
+      traefik.http.middlewares.secure-headers.headers.sslredirect: true
+      traefik.http.middlewares.secure-headers.headers.STSSeconds: 315360000
+      traefik.http.routers.http-catchall.entrypoints: web
+      traefik.http.routers.http-catchall.middlewares: redirect-to-https
+      traefik.http.routers.http-catchall.rule: HostRegexp(`{host:.+}`)
+      traefik.http.routers.traefik.entrypoints: websecure
+      traefik.http.routers.traefik.middlewares: oauth
+      traefik.http.routers.traefik.rule: "Host(`${TRAEFIK_DASHBOARD_HOSTNAME}`)"
+      traefik.http.routers.traefik.service: api@internal
+      traefik.http.routers.traefik.tls: true
+      traefik.http.routers.wildcard-certs.tls.certresolver: cloudflare
+      traefik.http.routers.wildcard-certs.tls.domains[0].main: "${CF_DOMAIN}"
+      traefik.http.routers.wildcard-certs.tls.domains[0].sans: "*.${CF_DOMAIN}"
+    networks:
+      - traefik
+    ports:
+      - 80:80/tcp
+      - 443:443/tcp
+      - 5201:5201/tcp
+      - 5201:5201/udp
+      - 51820:51820/udp
+    restart: always
+    volumes:
+      - ${TRAEFIK_DATA_VOLUME:-traefik-data}:/traefik-data/
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${TRAEFIK_FILEPROVIDER_VOLUME:-./fileProvider}:/traefik-data/fileProvider:ro
+  traefik-forward-auth:
+    image: thomseddon/traefik-forward-auth:${TRAEFIK_FORWARD_AUTH_TAG:-2.2.0}
+    environment:
+      AUTH_HOST: ${TRAEFIK_FORWARD_AUTH_HOSTNAME}
+      COOKIE_DOMAIN: ${TRAEFIK_FORWARD_AUTH_COOKIE_DOMAIN}
+      LIFETIME: ${TRAEFIK_FORWARD_AUTH_LIFETIME:-2592000}
+      LOG_LEVEL: ${TRAEFIK_FORWARD_AUTH_LOG_LEVEL:-warn}
+      PROVIDERS_GOOGLE_CLIENT_ID: ${TRAEFIK_FORWARD_AUTH_PROVIDERS_GOOGLE_CLIENT_ID}
+      PROVIDERS_GOOGLE_CLIENT_SECRET: ${TRAEFIK_FORWARD_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET}
+      SECRET: ${TRAEFIK_FORWARD_AUTH_SECRET}
+      WHITELIST: ${TRAEFIK_FORWARD_AUTH_WHITELIST}
+    labels:
+      traefik.enable: true
+      traefik.http.middlewares.oauth.forwardauth.address: http://traefik-forward-auth:4181
+      traefik.http.middlewares.oauth.forwardauth.authResponseHeaders: X-Forwarded-User
+      traefik.http.middlewares.oauth.forwardauth.trustForwardHeader : true
+      traefik.http.routers.oauth.entrypoints: websecure
+      traefik.http.routers.oauth.rule: Host(`${TRAEFIK_FORWARD_AUTH_HOSTNAME}`)
+      traefik.http.routers.oauth.tls: true
+      traefik.http.services.oauth.loadbalancer.server.port: 4181
+    networks:
+      - traefik
+networks:
+  traefik:
+    name: traefik
+volumes:
+  traefik-data:
+  traefik-fileprovider:
